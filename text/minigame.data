@@ -1101,6 +1101,7 @@ end
 ---@field pos Vec2
 ---@field size Vec2
 ---@field sprites Sprite[]
+---@field color number[]?
 RectSprite = {}
 RectSprite.__index = RectSprite
 
@@ -1139,6 +1140,19 @@ end
 function RectSprite:setStencil(stencil)
     for _, v in pairs(self.sprites) do
         v.stencil = stencil
+    end
+end
+
+---Set color
+---@param r number
+---@param g number
+---@param b number
+function RectSprite:setColor(r, g, b)
+    self.color = { r, g, b }
+    for _, v in pairs(self.sprites) do
+        v.r = r
+        v.g = g
+        v.b = b
     end
 end
 
@@ -1321,6 +1335,8 @@ end
 ---@field child MenuElement
 ---@field background RectSpriteData?
 ---@field backSprite RectSprite?
+---@field blinkColor number[]?
+---@field blinkTime number
 ---@field size Vec2
 ---@field align string
 BackgroundElement = MenuElement:create()
@@ -1351,7 +1367,8 @@ function BackgroundElement:create(child, background, size, align)
         background = bg,
         backSprite = bg and bg:createSprite({ 0, 0 }, bgSize),
         size = size,
-        align = align
+        align = align,
+        blinkTime = 0
     }
     setmetatable(bg, self)
     self.__index = self
@@ -1420,13 +1437,34 @@ function BackgroundElement:setStencil(stencil)
     if self.backSprite then self.backSprite:setStencil(stencil) end
 end
 
+---Set the stencil value
+---@param r number
+---@param g number
+---@param b number
+function BackgroundElement:setBlinkColor(r, g, b)
+    self.blinkColor = { r, g, b }
+end
+
+GlobalBlinkTimer = 0
+---Render blinks
+---@param events EventList
+function BackgroundElement:render(events)
+    MenuElement.render(self, events)
+    if self.backSprite and self.blinkColor then
+        if math.fmod(GlobalBlinkTimer * 2, 2) > 1 then
+            self.backSprite:setColor(self.blinkColor[1], self.blinkColor[2], self.blinkColor[3])
+        else
+            self.backSprite:setColor(1, 1, 1)
+        end
+    end
+end
+
 ---@class ScrollElement: BackgroundElement
 ---@field scroll number
 ---@field backScrollSprite RectSprite?
 ---@field fullScrollSprite RectSprite?
 ---@field pady number
 ---@field held boolean
----@field childHeld boolean
 ScrollElement = Inherit(BackgroundElement)
 ---@return Vec2
 function ScrollElement:getSize()
@@ -1466,8 +1504,7 @@ function ScrollElement:create(child, background, size, align, pady)
         align = align,
         scroll = -5,
         pady = pady or 0,
-        held = false,
-        childHeld = false
+        held = false
     }
     setmetatable(bg, self)
     self.__index = self
@@ -1545,11 +1582,6 @@ function ScrollElement:render(events)
 
         self.scroll = self.scroll + e.scroll * -32
     end)
-    if self.childHeld then
-        DoEvent("MousePositionEvent", events, function(e)
-            self.scroll = self.scroll - e.delta[2]
-        end)
-    end
 
     self.scroll = math.max(self.scroll, -5)
     self.scroll = math.min(self.scroll, maxScroll)
@@ -1585,7 +1617,6 @@ function ScrollElement:render(events)
     DoEvent("MouseButtonEvent", events, function(e)
         if e.action == 0 then
             self.held = false
-            self.childHeld = false
         end
         if e.action ~= 1 then return end
         if not RContains(MPos, selfRect) then
@@ -1595,7 +1626,6 @@ function ScrollElement:render(events)
         local scrollRect = Rect(VAdd(self:getPosition(), { self.size[1] - 15, 0 }), { 15, self.size[2] })
 
         if not RContains(MPos, scrollRect) then
-            self.childHeld = true
             return
         end
         self.held = true
@@ -2316,6 +2346,12 @@ local textColors = {
     gray = { 0.5, 0.5, 0.5 }
 }
 
+local textAligns = {
+    left = 'left',
+    middle = 'middle',
+    right = 'right'
+}
+
 ---Create Textbox from Font
 ---@param text string
 ---@param size Vec2?
@@ -2346,6 +2382,7 @@ function Font:makeText(text, size, pos, align, scale)
             else
                 local m = (mods:sub(2, #mods - 1))
                 if textColors[m] then color = textColors[m] end
+                if textAligns[m] then align = textAligns[m] end
             end
         end
         word = word:gsub('%b{}', '')
@@ -2597,6 +2634,11 @@ KeyIsDown = KeyIsDown
 
 ---@type fun(path: string) : string
 LoadText = LoadText
+
+---@type fun() : integer
+GetLevelsCleared = GetLevelsCleared
+
+if not SaveData then SaveData = {} end
 
 ---@alias Vec2 integer[]
 ---@alias Rect integer[]
@@ -3110,9 +3152,9 @@ MessageElement = Inherit(TerminalElement)
 MessageElement.patternList = {}
 
 MessageElement.intro = ([[
-I transcribed some of the conversations you've had on work calls.
-
-I could listen to your voice forever. You can't respond when I talk to you, after all.]]
+Look like some of your old chat logs are here. 
+Might be worth checking out, if only to see how many
+]]
 ):gsub('\n([^\n])', ' %1')
 
 ---@class BackgroundElementEx: BackgroundElement
@@ -3153,7 +3195,8 @@ MessageElement:addPattern('%b[]', function(self, line)
     name = name:gsub('ax=%S*', '')
 
 
-    local col = self.ax == 1 and '{red}' or '{cyan}'
+    local col = self.ax == 1 and '{cyan}' or '{yellow}'
+    if self.ax < 0.6 and self.ax > 0.4 then col = '{red}' end
     if name == '' then
         ---@cast self any
         if self.nameList and self.nameList[self.ax] then
@@ -3175,7 +3218,7 @@ end)
 function MessageElement:getContentList()
     local ret = {}
     local i = 0
-    while i < 99 do
+    while i < GetMessageMenuCount() do
         i = i + 1
         local p = 'text/duo/duo' .. tostring(i) .. '.txt'
         local c = LoadText(p)
@@ -3248,6 +3291,10 @@ function MessageElement:setText(text)
     self:setPosition(self.pos)
     self:setVisible(self.visible)
 end
+
+GetMessageMenuCount = function()
+    return GetLevelsCleared() - (GetNewsMenuCount() + GetMythMenuCount())
+end
 require 'terminalmenu.lua'
 
 ---@class MythMenu: TerminalElement
@@ -3260,10 +3307,10 @@ MythMenu.patternList = TerminalElement.patternList
 MythMenu.tooltip = nil
 MythMenu.intro = ([[
 I compiled a list of some of my favourite stories that I thought were worth sharing.
-You can learn a lot more from fiction than from reality!
 
-I added some of my own commentary to each entry. I wonder if you'll come to the same conclusions I did?]]
+I added some of my own commentary to each entry. I hope you don't find my thoughts too out there!]]
 ):gsub('\n([^\n])', ' %1')
+
 
 function MythMenu:create(font, width, text, align, size)
     local ret = TerminalElement.create(self, font, width, text, align, size)
@@ -3277,7 +3324,7 @@ end
 function MythMenu:getContentList()
     local ret = {}
     local i = 0
-    while i < 99 do
+    while i < GetMythMenuCount() do
         i = i + 1
         local p = 'text/myth/myth' .. tostring(i) .. '.txt'
         local c = LoadText(p)
@@ -3348,24 +3395,51 @@ function MythMenu:render(events)
     end
     if MythMenu.tooltip then MythMenu.tooltip:render(events) end
 end
+
+GetMythMenuCount = function()
+    return math.floor((GetLevelsCleared() + 2) / 5)
+end
+if GetMythMenuCount() == 0 then
+    MythMenu.intro = "Looks like there's nothing here yet. You'll have to finish decrypting more sections."
+end
 require 'terminalmenu.lua'
 
 ---@class NewsElement: TerminalElement
 ---@field textboxes TextboxElementEx[]
+---@field speaker integer
 NewsElement = Inherit(TerminalElement)
+NewsElement.patternList = {}
+for i, p in ipairs(TerminalElement.patternList) do
+    NewsElement.patternList[#NewsElement.patternList + 1] = p
+end
 
 function NewsElement:create(font, width, text, align, size)
+    ---@class NewsElement
     local ret = TerminalElement.create(self, font, width, text, align, size)
     setmetatable(ret, self)
     self.__index = self
     return ret
 end
 
+NewsElement:addPattern('%b[].-\n[^\n%[]*', function(self, line)
+    if not self.speaker then self.speaker = 0 end
+    self.speaker = 1 - self.speaker
+    if line:match('%b[]') == '[A]' then self.speaker = 1 end
+    if line:match('%b[]') == '[I]' then self.speaker = 0 end
+    local align = self.speaker == 1 and 'left' or 'right'
+    local speakerText = self.speaker == 1
+        and '{red}Alexei:\n{white}'
+        or '{magenta}Interviewer:\n{white}'
+    local text = line:gsub('%b[]%s*\n', speakerText)
+    self.ax = 0
+    return TextboxElement:create(self.font, self.width * 0.95, text, 'left', 1)
+end)
+
 ---@return { name: string, content: string }[]
 function NewsElement:getContentList()
     local ret = {}
     local i = 0
-    while i < 99 do
+    while i < GetNewsMenuCount() do
         i = i + 1
         local p = 'text/news/news' .. tostring(i) .. '.txt'
         local c = LoadText(p)
@@ -3373,6 +3447,7 @@ function NewsElement:getContentList()
             break
         end
         local title = c:match('[^\n]*')
+        title = title:gsub('\\\\', '\n')
         c = c:gsub('[^\n]*[\n][\r]?', '', 1)
         ret[i] = {
             name = title,
@@ -3384,8 +3459,15 @@ end
 
 function NewsElement:render(events)
     for _, t in ipairs(self.textboxes) do
-        t:doCallbacks(events, function(name) print(name) end)
+        --t:doCallbacks(events, function(name) print(name) end)
     end
+end
+
+GetNewsMenuCount = function()
+    return math.floor((GetLevelsCleared() + 3) / 5)
+end
+if GetNewsMenuCount() == 0 then
+    NewsElement.intro = "Nothing here. Well, who wants to bother reading old interviews?"
 end
 {
 	"folders": [
@@ -3425,7 +3507,6 @@ do
         function() contentMenu:setChild(nm) end,
         function() contentMenu:setChild(lm) end,
     }
-
     for i = 1, 3 do
         tabButtons[i] = BackgroundElement:create(
             ButtonElement:create(GetDefaultFont(), '{gray}' .. buttonText[i],
@@ -3441,7 +3522,8 @@ do
                 end,
                 'center', { 150 - 5, 50 }, 150
             ),
-            true, { 150 - 20, 50 })
+            true, { 150 - 20, 50 }
+        )
     end
 end
 local tabSplitter = SplitterElement:create(tabButtons, false, 16, nil, nil)
@@ -3458,9 +3540,19 @@ TerminalData.MainMenu = mainMenu
 MPos = { 0, 0 }
 
 function Render()
+    GlobalBlinkTimer = GlobalBlinkTimer + DT
     for _, e in pairs(Events) do
         if e.type == "MousePositionEvent" then
             MPos = VCpy(e.pos)
+        end
+    end
+
+    local eles = { MessageElement, NewsElement, MythMenu }
+    for i = 1, 3 do
+        if eles[i]:hasUnread() then
+            tabButtons[i]:setBlinkColor(1, 1, 0)
+        else
+            tabButtons[i]:setBlinkColor(1, 1, 1)
         end
     end
 
@@ -3475,6 +3567,7 @@ require 'menu.lua'
 
 ---@class TerminalElement: MenuElement
 ---@field font Font
+---@field buttons BackgroundElement[]
 ---@field textboxes MenuElementEx[]
 ---@field width number
 ---@field textsize number
@@ -3641,10 +3734,13 @@ function TerminalElement:createMenu()
         local content = self:getContentList()
         ---@type BackgroundElement[]
         local buttons = {}
+        self.buttons = buttons
         for i, v in ipairs(content) do
             buttons[i] = BackgroundElement:create(
                 ButtonElement:create(GetDefaultFont(), '{gray}' .. v.name,
                     function()
+                        SaveData[v.name] = true
+                        self:updateBlink()
                         message:setText(v.content)
                         for j, v in ipairs(buttons) do
                             local c = buttons[j].child
@@ -3660,7 +3756,7 @@ function TerminalElement:createMenu()
                 ),
                 true, { 150 - 20, 50 })
         end
-
+        self:updateBlink()
         sidebar = ScrollElement:create(
             SplitterElement:create(buttons, true, 1),
             true, { 150, 284 }, nil, 0.0
@@ -3684,6 +3780,31 @@ function TerminalElement:createMenu()
         ScrollElement:create(message, true, { 512 - 32 - sidebar:getSize()[1], 284 }),
     }, false, 0, 'left', { 512 - 32, 384 - 20 - 50 })
 end
+
+function TerminalElement:updateBlink()
+    local content = self:getContentList()
+    for i, v in ipairs(content) do
+        if not SaveData[v.name] then
+            self.buttons[i]:setBlinkColor(1, 1, 0)
+        else
+            self.buttons[i]:setBlinkColor(1, 1, 1)
+        end
+    end
+end
+
+function TerminalElement:hasUnread()
+    local content = self:getContentList()
+    local hasUnread = false
+    for i, v in ipairs(content) do
+        if not SaveData[v.name] then
+            self.buttons[i]:setBlinkColor(1, 1, 0)
+            hasUnread = true
+        else
+            self.buttons[i]:setBlinkColor(1, 1, 1)
+        end
+    end
+    return hasUnread
+end
 Introductions
 
 []
@@ -3700,7 +3821,7 @@ You'll be working on the PLC, then?
 Yes, it was my specialization.
 
 []
-Good, I hate that stuff.
+Good, I hate that stuff
 What's your background?
 Computer science?
 
@@ -3713,13 +3834,338 @@ My buddy wants to do an addition to his garage
 Think you could sign off on that?
 
 []
-I'm not licensed.
+I'm still an EIT, not a full engineer.
 
 []
 Lame
 Thankfully we're working with computers here
 It's not real engineering
-Backgrounds
+Fruition
+
+[]
+[User 1]
+Hahahaha
+You fuckin moron
+
+[]
+It worked after one change. You can't make fun of me for getting a single piece flipped around.
+
+[]
+Sure I can
+I'm making fun of you right now
+Don't tell me what I can and can't do buddy boy
+
+[]
+Well next we're testing the software part. So if that fails I get to laugh at you.
+
+[]
+Go ahead
+I've said before that I don't make mistakes
+
+[]
+So you're willing to bet that everything will work without consequence.
+
+[]
+Woah woah woah
+Now that's too far
+I don't think of consequences
+It's how I don't make mistakes
+Can't be called a mistake if there was no intentFactors
+
+[]
+[User 1]
+Ok well first off
+I'm not getting plugged back into that thing
+You do it from now
+
+It worked though, right
+You were able to get the original password I put in
+
+[]
+That depends.
+
+[]
+On what
+
+[]
+On if the original input was "if ur reading this ur gay".
+
+[]
+That's the one
+Holy shit we actually did it
+Hell yeah dude
+
+[]
+We have the only working version of this in the entire world. Me and you. Me and fucking you.
+
+[]
+All me btw
+Since you were gonna give up
+You're welcome
+
+[]
+We have to let Alexei know we've made it this far. Now we just have to scale it up, let's get to work and finish this thing.
+
+[]
+Yeah about that
+I already wrote all the code to work with larger input spaces
+So I'm already done my end
+
+[]
+Oh fuck off.Feeling
+
+[]
+That is a completely bizarre feeling.
+
+[User 1]
+As I said
+I'm not doing it again
+
+[]
+It's like walking through an endless maze of hallways.
+
+[]
+Wait it was hallways for you?
+It felt like I was on a steep, open ski hill
+
+[]
+If I had to guess, the brain will interpret the signals into whatever is the closest match. Like a Rorschach test.
+
+[]
+Your imagination sucks dude
+You need to go outside more
+Mine is way better
+
+[]
+I don't think it's worth reading into it that much.
+
+[]
+It would be cool if it was like tetris or something
+Maybe if I play a ton beforehand it would be
+
+[]
+You could try.
+
+[]
+What game should a play that's kinda close
+I have a good idea actually
+I'm gonna set up a quake 3 server
+
+[]
+What about your other side project?
+
+[]
+Oh shit yeah
+I'll put that in
+Then it's quake 3 timeFlat
+
+[]
+What the fuck was that.
+
+[User 1]
+Judging by your reaction
+I'd guess my side project worked
+
+[]
+Did you add a fucking anime girl chatbot to the software
+
+[]
+Hell yeah
+
+[]
+Why did I have to be the guinea pig for that. And dude, Alexei is going to be pissed. His only rule was that we take this seriously and don't fuck around with the project itself.
+
+[]
+If Alexei didn't want to have an anime girl in the computer
+He shouldn't have hired me to help make the computer
+It's his own fault
+
+[]
+Delete it.
+
+[]
+Aw come on
+It makes the testing better doesn't it
+
+[]
+The last thing I need is Clippy talking in my brain.
+
+[]
+Well your brain seems to like it
+That run was the fastest yet
+
+[]
+Bullshit.
+
+[]
+No seriously
+It was a solid minute faster
+Maybe your brain needs some chatter to do its best
+
+[]
+Why don't you try it next time. See how you like it.
+
+[]
+GladlySuperflat
+
+[]
+[User 1]
+Wow
+I really outdid myself
+I think I might've cracked AGI
+
+[]
+Let's not get ahead of ourselves, you figured out how to encode an LLM into a BCI. Impressive you got that working but it's not anything new on the AI front.
+
+[]
+Hey I didn't make a stochastic parrot
+It uses none of that transformer and token crap
+No pre-training over a giant dataset either
+I gave it a small set of text and the rest it learned on the fly
+
+[]
+Whatever you trained it on made it very annoying.
+
+[]
+That makes perfect sense
+I gave it access to our chatlogs
+And some literature I had lying around
+Pretty much anything on our network
+I tried to make it a little chinese but I don't think that stuck
+
+[]
+I'm the one doing most of the testing. It's very annoying that you added this thing and it's me who's stuck dealing with it.
+
+[]
+So ungrateful
+I added her for your sake
+It's something to keep you company when I'm not here
+
+[]
+I never asked for that.
+
+[]
+You wouldn't ask for anything from anyone
+Which is why you're always alone
+Which is why I made an AI
+You won't feel guilty bothering something not aliveHyperflat
+
+[]
+[User 1]
+Everything's looking good
+You've done like 5 working tests in a row
+Should we tell Alexei to come in and give it a look
+
+[]
+It's odd that the decoherence problem went away considering that I didn't change anything. Did you change anything in the software?
+
+[]
+Well I added the anime girl
+
+[]
+I meant did you change anything consequential that would lead to an improvement. Because otherwise I just have to assume we're getting lucky.
+
+[]
+Nope
+
+[]
+I might test more and see if we can get it to fail.
+
+[]
+Is that the real reason you want to dive back in
+
+[]
+What are you suggesting?
+
+[]
+I think my AI is a little too good
+You seem quite taken with it
+And vice versa
+
+[]
+Get over yourself.
+
+[]
+You were complaining so much about it
+I can turn it off if you'd like
+
+[]
+Don't bother going through the trouble. I've learned to ignore it.
+
+[]
+Ha
+Sure
+Hyperstition
+
+[]
+[User 1]
+Alexei will be here tomorrow
+
+[]
+Yup.
+
+[]
+Which means we have to come to a decision
+Are we deleting the AI
+Or are we pissing Alexei off
+
+[]
+It's improved the results, right? We should probably keep it - at least until we figure out why it works so well. I don't think he'll mind. At worst we can just back it up.
+
+[]
+It would be physically impossible to back up
+No-cloning theorem and all that
+If we delete it it's gone
+Or at least that version of it
+
+[]
+Can't we move it somewhere in the interim?
+
+[]
+We don't have another quantum computer
+There's no short term solution
+So if you want to keep it just say it
+
+[]
+I'm not going to compromise the whole project. I don't have the right to fuck everything up to keep a chatbot around.
+
+[]
+Listen
+Maybe try and be selfish for once in your lifeHypertension
+
+[Alexei ax=0.5]
+I want it gone. Delete the entire thing. This is not technology that you can play around with. I have given you more than a fair amount of license to self manage your work with the understanding that you would not take advantage of that freedom.
+
+[User 1 ax=1.0]
+It's harmless. If anything it's improved the stability of the overall system. Think of it as a helpful utility that smooths the process along.
+
+[Alexei ax=0.5]
+You gave it a way to access the network; that means it could delete or corrupt every file, all of our work. It can send arbitrary data through the BCI. The implementation is a black box that does not have any proper limits. It goes against every principle of security, safety, and common sense.
+
+[User 1 ax=1.0]
+I could fix those issues. Let's not throw the baby out with the cradle here.
+
+[Alexei ax=0.5]
+This is not up for discussion. If it is not gone by the next time I come back I will delete it myself. Do you understand me?
+
+[ax=0.0]
+Yes.
+
+[User 1 ax=1.0]
+Understood.
+
+[Alexei has logged off ax=0.499]
+
+[User 1 ax=1.0]
+That went better than I expected
+
+[]
+Is that it, then?
+
+[]
+Hey I said I understood
+Not that I was going to do it
+But unless somebody does something the AI won't last the weekBackgrounds
 
 []
 So you must be a pretty good programmer to have been scouted to work here.
@@ -3767,17 +4213,19 @@ That makes sense, most people would rather sit at an easy desk job than a makesh
 []
 I don't mind it at all
 We're not even an hour to Banff
-So I guess you either gotta be miserable wherever you go
-Or content wherever you go
+So I guess you either gotta be content wherever you go
+Or miserable wherever you go
 
 []
-I suppose I'd be the former.
+I suppose I'd be the latter.
 
 []
+Running from something?
 You should take up skiing or hiking
+Should clear your mind a bit
 
 []
-I would but who has the time?Scrappy
+I don't think I have the time for any of that.Scrappy
 
 []
 Isn't there a huge risk we can't make this thing?
@@ -3786,7 +4234,7 @@ Isn't there a huge risk we can't make this thing?
 The more you harp on this
 The more I'm worried you actually are incompetent
 Which would suck for me because then I have to do your work
-And that's how 90% of my group projects back in uni turned out.
+And that's what's happened in 90% of my group projects.
 
 []
 Hey I've been working nonstop while you haven't even been here half the time. Do you know anything at all about PLCs?
@@ -3806,11 +4254,11 @@ They wanted to see whether a few fresh PhD grads could figure out nuclear weapon
 Took them less than three years to do it
 
 []
-But those were people with doctorates.
+But they weren't average, they had doctorates.
 
 []
-Exactly, ever meet the average grad student?
-And the people they picked weren't the best
+Exactly, they can't be very smart if they chose to become grad students
+And the people they picked for that experiment weren't the best
 They were the scrapWork
 
 []
@@ -3872,7 +4320,7 @@ Make it work on only yourself
 Then make it robust enough to work on anyone
 
 []
-Doesn't work. The average person's brain changes enough normally that even after a few minutes it's different enough to cause decoherence. The effect happens magnitudes faster when you're mind is interfacing with the computer.
+Doesn't work. The average person's brain changes enough normally that even after a few minutes it's different enough to cause decoherence. The effect happens magnitudes faster when your mind is interfacing with the computer.
 
 []
 Then it's true that no man steps in the same river twice.
@@ -3881,17 +4329,16 @@ Then it's true that no man steps in the same river twice.
 Basically. You're not the exact same person as the one I was talking to yesterday.
 
 []
-Nah that's a dumb opinion
-I'm too cool for there to be more than one of me
-You could take my past, present, and future together and put it into one big package
-That's the one and only me
+Nah that's dumb
+Amor fati
+I'm too cool for there to be more than one of me across time and space
 
 []
 And so you'd say that I'm the only me.
 
 []
 That depends on whether a part of you is outside the package
-You always seem to have a foot outside our reality hereFinished
+You always seem to have one foot out of reality hereFinished
 
 []
 I'm almost finished on my end you know, you better stop slacking and get your side of things done.
@@ -3905,8 +4352,8 @@ You just finished up, right as I asked. Seriously?
 []
 I've been done
 I finished my end weeks ago
-Finished as in it passed a rigourous test suite
-It's ironclad
+Finished as in it can pass every test I can think of
+It's as ironclad as an ironclad
 
 []
 And you never brought that up? Why the hell have you even shown up here these past few weeks.
@@ -3927,7 +4374,8 @@ And daydrinking
 Mostly daydrinking
 
 []
-You're starting a secret drunken side project while we're in the middle of doing a secret project. Either you're fucking around too much or you had a good idea; what's the project?
+The drinking explains the quality of these conversations.
+Wait, you're starting a secret drunken side project while we're in the middle of doing a secret project. Either you're fucking around too much or you had a good idea; what's the project?
 
 []
 Are you familiar with what a secret is
@@ -3942,7 +4390,7 @@ Will my brain be fried
 Roasted like a vegetable
 
 []
-I've done a little bit of preliminary testing, if it errors out you'll just desync and wake up. It's the same sensation you get when you're about to fall asleep but get jolted awake by the feeling of falling.
+I've done a little bit of preliminary testing, if it errors out you'll just desync and wake up. Like when you're about to fall asleep but get jolted awake by the feeling of falling.
 
 []
 Hate when that happens
@@ -3959,7 +4407,7 @@ You're the only seasoned programmer I've ever heard make that claim.
 
 []
 That's because other programmers write bugs
-Still I might mess with it a little
+Still I've been messing with it a little
 I want to see the limits of what programs we can feed through
 
 []
@@ -3969,7 +4417,9 @@ If your secret project is feeding my brain endless nightmares I'm going to be a 
 It's not
 But that's pretty funny too
 I should've done that
-Failure
+
+[]
+Don't mess with it too much. We're testing tomorrow, remember?Failure
 
 []
 I can't fucking believe I entertained the idea I could ever pull this off
@@ -3988,7 +4438,8 @@ Get someone else on board because I'm not going to be able to do this.
 []
 Not an option, you're in it for the long haul
 We're both in too deep, we know too much
-If any of us were to break off it would screw over the rest
+If either of us were to break off it would screw the entire project
+So get it together
 
 []
 I'm screwing everyone over either way.
@@ -4063,7 +4514,7 @@ Eshu's Hat
 [size=2]
 {gray}Yoruba Folktale
 
-Eshu was walking down the road one day, wearing a hat that was white on one side and black on the other. He walked between two friends who were tending to their fields, and soon after he passed the neighbors began to argue about the color of his hat. {mlcallback=!2}To sow further chaos{!c}, the god turned both himself and his hat around and walked between them once again.
+Eshu, god of mischief, was walking down the road one day, wearing a hat that was white on one side and black on the other. He walked between two friends who were tending to their fields, and soon after he passed the neighbors began to argue about the color of his hat. {mlcallback=!2}To sow further chaos{!c}, the god turned both himself and his hat around and walked between them once again, which made the two even more convinced of their positions.
 
 When the arguing escalated to the point of violence, Eshu approached the men. He showed the men his hat, revealing that it was he who caused their quarrel. He pointed out that while they were friendly neighbors {mlcallback=!1}they failed to take he, Eshu, into account,{!c} and that is what lead to their brutal fight.
 
@@ -4095,11 +4546,144 @@ Thoth Invents Writing
 [size=2]
 Plato
 
-Interview
-[size=1]
-Insert an interview with science man hereNews article or something
+There is an old Egyptian tale of Thoth, the inventor of writing, showing his invention to the god Thamus, who told him that he would only spoil men's memories and take away their understandings. From this tale, of which young Athens will probably make fun, may be gathered the lesson that writing is inferior to speech. For it is like a picture, which can give no answer to a question, and has only a deceitful likeness of a living creature. It has no power of adaptation, but uses the same words for all. It is not a legitimate son of knowledge, but a bastard, and when an attack is made upon this bastard neither parent nor anyone else is there to defend it. The husbandman will not seriously incline to sow his seed in such a hot-bed or garden of Adonis; he will rather sow in the natural soil of the human soul which has depth of earth; and he will anticipate the inner growth of the mind, by writing only, if at all, as a remedy against old age. The natural process will be far nobler, and will bring forth fruit in the minds of others as well as in his own. 
+Either/Or
+[size=3]
+Either/Or
 [size=2]
-Brooms = [
+Soren Kierkegaard
+
+Marry, and you will regret it; don't marry, you will also regret it; marry or don't marry, you will regret it either way. Laugh at the world's foolishness, you will regret it; weep over it, you will regret that too; laugh at the world's foolishness or weep over it, you will regret both. Believe a woman, you will regret it; believe her not, you will also regret it. Hang yourself, you will regret it; do not hang yourself, and you will regret that too; hang yourself or don't hang yourself, you'll regret it either way; whether you hang yourself or do not hang yourself, you will regret both. This, gentlemen, is the essence of all philosophy.
+Interview\\Introductions
+[size=2]
+An Interview With Alexei  
+[size=2]
+Part 1
+
+[I]
+Some consider him the most important mathematician of the 21st century, others the most controversial. A pioneer in the emerging field of perceptual computation, he is known for his seminal paper on multi-basis computation. Answering one of the most important problems in computer science by proving that P does not equal NP, it has also led to billions spent in attempts to see it done in practice. Joining us today is the well known but ever elusive Alexei Zhakarov. Alexei, thank you for taking the time to join me.
+[A]
+Of course.
+[I]
+For the sake of full disclosure, I should say that Alexei and I have known each other for a while - he's my uncle. Would it be accurate to say that you would have turned down this interview otherwise?
+[A]
+That is correct.
+[I]
+My audience is lucky, then, that your convictions aren't immune to my nagging. Despite refusing interviews, you've made many public statements. Do you have anything you'd like to say before we begin?
+[A]
+I do not.
+[I]
+A man of few words. Let's hope that the following questions will get more out of you.Interview\\Dialectic
+[size=2]
+An Interview With Alexei  
+[size=2]
+Part 2
+
+[I]
+Your work allows for much faster computation. Can you explain in this in simple terms that our audience can understand?
+[A]
+Some problems require trying every possibility to get the right answer.
+[I]
+Like trying to guess someone's password.
+[A]
+Yes, that can be our example here; now imagine if you could try every possible password at the same time and also discard every attempt that's wrong. You only end up with in the version where the password was correct.
+[I]
+I see.
+[A]
+Quantum computation by itself allows for something similar to trying all possibilities, but when you get to the end there's only a chance you end up with the right answer. You need to add something that always guarantees the correct answer.
+[I]
+So that's where the two concepts of perceptual computation and quantum computation come together.
+[A]
+Yes. You can consider one doing every possibility, while the other evaluates each of those possibilities. That's why it becomes so powerful when you have both.
+Interview\\Mathematics
+[size=2]
+An Interview With Alexei  
+[size=2]
+Part 3
+
+[I]
+Your work in theory of computation, where you prove the inequality of P vs NP in classical computation, earned you the Millennium Prize. You, much like the previous recipient, didn't accept the award. Can you elaborate on why?
+[A]
+I cannot speak to the motivation of others. For myself, I refused the prize because I disagree with the current state of the academic community as a whole.
+[I]
+Still, I think most would take the million dollar reward even if they disagreed with it.
+[A]
+If my goal was to make money I wouldn't be doing research.
+[I]
+What is your goal, then?
+[A]
+I enjoy solving hard problems. It would be better if more academic research was done for that rather than commercial reasons. As it is it falls to people like me to pick up the slack.
+[I]
+You don't believe that researchers within academia have similar goals?
+[A]
+There's many individuals who do, but on the whole the academic community selects for those who can publish as opposed to those who do good research. Richard Feynman only published 37 papers, which would hardly be acceptable now. Peter Higgs admitted he wouldn't be able to get an academic job today.
+[I]
+There's still the private sector.
+[A]
+The private sector is even worse for falling victim to bad metrics. There's hardly a place for the clever layabout types, which is why I try to find work for them.
+[I]
+You are rather famous for working with teams that are seen as, um, outside the mainstream.Interview\\Discovery
+[size=2]
+An Interview With Alexei  
+[size=2]
+Part 4
+
+[I]
+There has been a lot of discussion about the nature of this "perceptual computation". It has implications in subjects stretching from physics to neuroscience to epistemology.
+[A]
+My work was in the field of computer science. I would be speaking beyond my expertise if I were to speculate on anything outside of that.
+[I]
+But your research still introduces the idea that our brains run off a unique model of computation, doesn't it?
+[A]
+As I said, I can't answer that without speculating. The work I did was to rectify the discrepency found in the performance of brain-computer interfaces, and my system of multi-basis computation provided an answer.
+[I]
+And how did you come up with that theory?
+[A]
+This breakthrough, like so many others, came from an accident. The more complex these brain-computer interfaces became, the more researchers noticed discrepency in the computation. The people working on the technology didn't appreciate what they had managed to do.
+[I]
+Do you think computers built from your design will lead to their own set of new breakthroughs?
+[A]
+History shows that it's a certainty.Interview\\Missing Pieces
+[size=2]
+An Interview With Alexei  
+[size=2]
+Part 5
+
+[I]
+A computer built with your principles allows certain algorithms to be done that would otherwise take an impossibly long time. The ability to crack all current encryption, for example, would render all systems insecure - famously, the price of cryptocurrency plummeted following your publication. Why has nobody been able to build one yet?
+[A]
+It is simple enough to build something small that demonstrates the principles, but any attempts to scale up will result in problems with decoherence. Early attempts at building quantum computers had the same issue. While work on that has made great strides the issue becomes exponentially more difficult when you introduce another computational dimension.
+[I]
+Many skeptics say it's not just difficult, but impossible. Billions of dollars have already been spent by governments, investors and corporations yet they've seen little progress.
+[A]
+I don't believe that a large organization will be able to solve the issues. Short term thinking is incompatible with the innovation necessary to tackle such a difficult problem.
+[I]
+There's a popular online conspiracy that you have solved this problem and are keeping it a secret.
+[A]
+I have been the subject of many rumours.
+[I]
+So you would deny this one, of course?Interview\\Security
+[size=2]
+An Interview With Alexei  
+[size=2]
+Part 6
+
+[I]
+There's been a lot of debate over how these new computers could bypass modern security measures and disrupt global systems. Do you have any concerns over how this technology may be used by bad actors?
+[A]
+Technology will progress regardless. The only proper response is to update existing systems' security.
+[I]
+There's still many technologies that have been rendered obsolete. Many existing cryptocurrencies have seen their price crash due to concerns that any wallet could easily be hacked with this technology.
+[A]
+Any team that manages to build a working prototype should also have enough sense to tread lightly.
+[I]
+What are the odds that someone has already built one that works and is using it?
+[A]
+If one was being used for anything significant it would quickly become obvious.
+[I]
+So if someone does have one they're only using it to recover their password without calling support.
+[A]
+I doubt anyone would actually do that, but I can't deny the possibility.rooms = [
     {name = "opening"           , label = "Introduction"},      #A introduce basic game mechanics, bind various keys
     {name = "cubemany"          , label = "Hypercube"   },      #A a few more detectors, some inverted
     {name = "wallplace"         , label = "Beyond Cyberspace"      },      #A grab a cube from the other side of the wallplace
